@@ -10,8 +10,10 @@ AstrBot 的 NASA Astronomy Picture of the Day 插件。
 - 支持返回图片、标题、日期、说明
 - 支持将标题和说明翻译为简体中文
 - 支持分段发送或合并为一条消息链发送
+- 支持按 UMO 列表定向自动推送到指定群聊/会话
 - 内置 APOD 数据缓存，减少重复请求 NASA API
 - 内置翻译结果缓存，避免重复翻译相同文本
+- 内置推送状态与推送内容缓存，实现“拉取一次，发送多次”
 - 支持超时和失败重试配置
 
 ## 适用版本
@@ -28,6 +30,12 @@ AstrBot 的 NASA Astronomy Picture of the Day 插件。
 
 ```text
 /apod
+```
+
+### 获取当前会话 UMO（用于自动推送配置）
+
+```text
+/sid
 ```
 
 ## 配置说明
@@ -119,6 +127,24 @@ NASA API 临时错误时的重试次数。
 - 类型：`int`
 - 默认值：`2`
 
+### `push`
+
+自动推送配置。
+
+- 类型：`object`
+
+子项：
+
+- `enabled`：是否启用自动推送，类型为 `bool`，默认 `true`
+- `target_unified_msg_origins`：目标会话 UMO 列表，类型为 `list`，默认 `[]`
+- `poll_interval_seconds`：轮询间隔（秒），类型为 `int`，默认 `600`
+- `max_groups_per_round`：单轮最多推送数量，类型为 `int`，默认 `0`（不限制）
+
+说明：
+
+- UMO 可通过 `/sid` 获取
+- APOD 每日更新时间不固定，插件采用“轮询 + 按 APOD 日期去重”方式避免重复推送
+
 ## 配置示例
 
 ```json
@@ -139,7 +165,15 @@ NASA API 临时错误时的重试次数。
   },
   "is_divided": true,
   "timeout": 120,
-  "retry_count": 2
+  "retry_count": 2,
+  "push": {
+    "enabled": true,
+    "target_unified_msg_origins": [
+      "aiocqhttp:GroupMessage:123456789"
+    ],
+    "poll_interval_seconds": 600,
+    "max_groups_per_round": 0
+  }
 }
 ```
 
@@ -156,7 +190,7 @@ NASA API 临时错误时的重试次数。
 
 ## 缓存机制
 
-插件包含两类缓存：
+插件包含三类缓存：
 
 ### APOD 数据缓存
 
@@ -169,6 +203,12 @@ NASA API 临时错误时的重试次数。
 - 标题和说明翻译结果会被缓存
 - 相同文本再次出现时，优先使用缓存翻译结果
 - 可以减少模型调用次数并提升响应速度
+
+### 自动推送缓存
+
+- `apod_push:last_sent_date`：记录最近一次已推送的 APOD 日期
+- `apod_push:last_payload:<date>`：记录某天 APOD 的已组装推送内容
+- 一轮推送中只拉取一次 APOD，然后复用同一份内容推送给多个目标会话
 
 ## 翻译说明
 
