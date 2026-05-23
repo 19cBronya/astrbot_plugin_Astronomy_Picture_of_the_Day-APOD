@@ -137,13 +137,14 @@ NASA API 临时错误时的重试次数。
 
 - `enabled`：是否启用自动推送，类型为 `bool`，默认 `true`
 - `target_unified_msg_origins`：目标会话 UMO 列表，类型为 `list`，默认 `[]`
-- `poll_interval_seconds`：轮询间隔（秒），类型为 `int`，默认 `600`
+- `daily_push_time`：每天自动推送时间（本机时区，24 小时制 `HH:MM`），类型为 `string`，默认 `"09:00"`
 - `max_groups_per_round`：单轮最多推送数量，类型为 `int`，默认 `0`（不限制）
 
 说明：
 
 - UMO 可通过 `/sid` 获取
-- APOD 每日更新时间不固定，插件采用“轮询 + 按 APOD 日期去重”方式避免重复推送
+- 到达 `daily_push_time` 后执行一次推送，并通过 APOD 日期去重避免重复发送
+- `daily_push_time` 使用运行 AstrBot 机器的本地时区
 
 ## 配置示例
 
@@ -171,7 +172,7 @@ NASA API 临时错误时的重试次数。
     "target_unified_msg_origins": [
       "aiocqhttp:GroupMessage:123456789"
     ],
-    "poll_interval_seconds": 600,
+    "daily_push_time": "09:00",
     "max_groups_per_round": 0
   }
 }
@@ -208,7 +209,7 @@ NASA API 临时错误时的重试次数。
 
 - `apod_push:last_sent_date`：记录最近一次已推送的 APOD 日期
 - `apod_push:last_payload:<date>`：记录某天 APOD 的已组装推送内容
-- 一轮推送中只拉取一次 APOD，然后复用同一份内容推送给多个目标会话
+- 一轮定时推送中只拉取一次 APOD，然后复用同一份内容推送给多个目标会话
 
 ## 翻译说明
 

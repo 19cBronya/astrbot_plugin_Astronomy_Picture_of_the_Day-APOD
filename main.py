@@ -1,7 +1,7 @@
 # ruff: noqa: UP006, UP035, UP045
 import asyncio
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -64,6 +64,30 @@ class APOD(Star):
     def _build_push_payload_cache_key(cls, apod_date: str) -> str:
         return f"{cls.PUSH_PAYLOAD_KEY_PREFIX}{apod_date}"
 
+    @staticmethod
+    def _normalize_daily_push_time(value: Any) -> str:
+        raw = str(value).strip() if value is not None else ""
+        if not raw:
+            return "09:00"
+        try:
+            parsed = datetime.strptime(raw, "%H:%M")
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            logger.warning(
+                f"push.daily_push_time 配置无效：{raw}，将回退为默认值 09:00（格式示例：08:30）。"
+            )
+            return "09:00"
+
+    def _seconds_until_next_daily_push(self) -> int:
+        now = datetime.now()
+        push_time = datetime.strptime(self.daily_push_time, "%H:%M").time()
+        next_push_at = now.replace(
+            hour=push_time.hour, minute=push_time.minute, second=0, microsecond=0
+        )
+        if next_push_at <= now:
+            next_push_at += timedelta(days=1)
+        return max(1, int((next_push_at - now).total_seconds()))
+
     async def initialize(self):
         logger.info("正在初始化 NASA APOD 插件...")
 
@@ -86,8 +110,8 @@ class APOD(Star):
         self.target_unified_msg_origins = self._ensure_str_list(
             self.push.get("target_unified_msg_origins", [])
         )
-        self.poll_interval_seconds = max(
-            60, int(self.push.get("poll_interval_seconds", 600))
+        self.daily_push_time = self._normalize_daily_push_time(
+            self.push.get("daily_push_time", "09:00")
         )
         self.max_groups_per_round = max(0, int(self.push.get("max_groups_per_round", 0)))
 
@@ -100,7 +124,7 @@ class APOD(Star):
         if self.push_enabled and self.target_unified_msg_origins:
             self.push_task = asyncio.create_task(self._push_loop())
             logger.info(
-                f"APOD 自动推送任务已启动：轮询间隔 {self.poll_interval_seconds} 秒，目标会话 {len(self.target_unified_msg_origins)} 个。"
+                f"APOD 自动推送任务已启动：每天 {self.daily_push_time} 执行，目标会话 {len(self.target_unified_msg_origins)} 个。"
             )
         elif self.push_enabled:
             logger.warning(
@@ -207,40 +231,40 @@ class APOD(Star):
     async def _run_push_once(self):
         targets = self._get_round_targets()
         if not targets:
-            logger.info("自动推送轮询：当前未配置可用 target_unified_msg_origins，跳过本轮。")
+            logger.info("自动推送任务：当前未配置可用 target_unified_msg_origins，跳过本轮。")
             return
 
         if self._needs_translation() and not self.provider:
-            logger.warning("自动推送轮询：已启用翻译但未配置 provider，跳过本轮。")
+            logger.warning("自动推送任务：已启用翻译但未配置 provider，跳过本轮。")
             return
 
         apod_data = await self.get_cache_apod()
         if not apod_data:
             logger.warning(
-                f"自动推送轮询：拉取 APOD 失败，原因：{self.last_apod_error or '未知错误'}"
+                f"自动推送任务：拉取 APOD 失败，原因：{self.last_apod_error or '未知错误'}"
             )
             return
 
         apod_date = str(apod_data.get("date", "")).strip()
         if not apod_date:
-            logger.warning("自动推送轮询：APOD 数据缺少 date，跳过本轮。")
+            logger.warning("自动推送任务：APOD 数据缺少 date，跳过本轮。")
             return
 
         last_sent_date = await self.get_cache(self.PUSH_LAST_SENT_DATE_KEY)
         if str(last_sent_date).strip() == apod_date:
-            logger.info(f"自动推送轮询：{apod_date} 已推送过，跳过重复推送。")
+            logger.info(f"自动推送任务：{apod_date} 已推送过，跳过重复推送。")
             return
 
         validation_error = self._validate_apod_output(apod_data)
         if validation_error:
-            logger.warning(f"自动推送轮询：{validation_error}")
+            logger.warning(f"自动推送任务：{validation_error}")
             return
 
         payload = await self._get_or_build_push_payload(apod_data, apod_date)
         success_count = 0
         chain = self._build_chain_from_payload(payload)
         if not chain:
-            logger.warning("自动推送轮询：当前配置未启用任何可发送内容，跳过本轮。")
+            logger.warning("自动推送任务：当前配置未启用任何可发送内容，跳过本轮。")
             return
 
         for target in targets:
@@ -248,28 +272,34 @@ class APOD(Star):
                 await self.context.send_message(target, self._build_chain_from_payload(payload))
                 success_count += 1
             except Exception as exc:
-                logger.error(f"自动推送轮询：向会话 {target} 发送失败：{exc}")
+                logger.error(f"自动推送任务：向会话 {target} 发送失败：{exc}")
 
         if success_count > 0:
             await self.put_cache(self.PUSH_LAST_SENT_DATE_KEY, apod_date)
             logger.info(
-                f"自动推送轮询：{apod_date} 推送完成，成功 {success_count}/{len(targets)}。"
+                f"自动推送任务：{apod_date} 推送完成，成功 {success_count}/{len(targets)}。"
             )
         else:
-            logger.warning("自动推送轮询：本轮所有目标发送失败，不更新已推送日期。")
+            logger.warning("自动推送任务：本轮所有目标发送失败，不更新已推送日期。")
 
     async def _push_loop(self):
-        logger.info("APOD 自动推送轮询已进入运行状态。")
+        logger.info("APOD 自动推送定时任务已进入运行状态。")
         while True:
+            wait_seconds = self._seconds_until_next_daily_push()
+            next_run_at = (datetime.now() + timedelta(seconds=wait_seconds)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            logger.info(
+                f"APOD 自动推送定时任务：下次将在 {next_run_at} 执行（配置时间 {self.daily_push_time}）。"
+            )
             try:
+                await asyncio.sleep(wait_seconds)
                 await self._run_push_once()
             except asyncio.CancelledError:
                 logger.info("APOD 自动推送任务已取消。")
                 raise
             except Exception as exc:
-                logger.error(f"APOD 自动推送轮询发生异常：{exc}")
-
-            await asyncio.sleep(self.poll_interval_seconds)
+                logger.error(f"APOD 自动推送定时任务发生异常：{exc}")
 
     @filter.command("apod")
     async def apod(self, event: AstrMessageEvent):
