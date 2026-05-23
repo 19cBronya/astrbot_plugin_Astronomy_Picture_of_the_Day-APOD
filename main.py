@@ -12,7 +12,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 
-@register("apod", "Cysheper", "NASA APOD plugin", "0.0.1")
+@register("apod", "Cysheper", "NASA APOD plugin", "0.0.2")
 class APOD(Star):
     APOD_CACHE_KEY = "apod_cache"
     PUSH_LAST_SENT_DATE_KEY = "apod_push:last_sent_date"
